@@ -13,13 +13,15 @@ AOpticalFlowCamera::AOpticalFlowCamera(const FObjectInitializer &ObjectInitializ
 {
   AddPostProcessingMaterial(
       TEXT("Material'/Carla/PostProcessingMaterials/PhysicLensDistortion.PhysicLensDistortion'"));
+//  AddPostProcessingMaterial(
+//#if PLATFORM_LINUX
+//      TEXT("Material'/Carla/PostProcessingMaterials/DepthEffectMaterial_GLSL.DepthEffectMaterial_GLSL'")
+//#else
+//      TEXT("Material'/Carla/PostProcessingMaterials/DepthEffectMaterial.DepthEffectMaterial'")
+//#endif
+//  );
   AddPostProcessingMaterial(
-#if PLATFORM_LINUX
-      TEXT("Material'/Carla/PostProcessingMaterials/DepthEffectMaterial_GLSL.DepthEffectMaterial_GLSL'")
-#else
-      TEXT("Material'/Carla/PostProcessingMaterials/DepthEffectMaterial.DepthEffectMaterial'")
-#endif
-  );
+          TEXT("Material'/Carla/PostProcessingMaterials/VelocityMaterial.VelocityMaterial'"));
 }
 
 void AOpticalFlowCamera::SendPixels(UWorld *World, ELevelTick TickType, float DeltaSeconds)
