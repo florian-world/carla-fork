@@ -11,6 +11,7 @@ FActorDefinition AOpticalFlowCamera::GetSensorDefinition()
 AOpticalFlowCamera::AOpticalFlowCamera(const FObjectInitializer &ObjectInitializer)
   : Super(ObjectInitializer)
 {
+  Enable16BitFormat(true);
   AddPostProcessingMaterial(
       TEXT("Material'/Carla/PostProcessingMaterials/PhysicLensDistortion.PhysicLensDistortion'"));
 //  AddPostProcessingMaterial(
@@ -26,5 +27,5 @@ AOpticalFlowCamera::AOpticalFlowCamera(const FObjectInitializer &ObjectInitializ
 
 void AOpticalFlowCamera::SendPixels(UWorld *World, ELevelTick TickType, float DeltaSeconds)
 {
-  FPixelReader::SendPixelsInRenderThread(*this);
+  FPixelReader::SendPixelsInRenderThread(*this, true);
 }

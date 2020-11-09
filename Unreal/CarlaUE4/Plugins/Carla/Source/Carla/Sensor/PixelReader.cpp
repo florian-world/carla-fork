@@ -127,7 +127,8 @@ void FPixelReader::WritePixelsToBuffer(
     UTextureRenderTarget2D &RenderTarget,
     carla::Buffer &Buffer,
     uint32 Offset,
-    FRHICommandListImmediate &InRHICmdList
+    FRHICommandListImmediate &InRHICmdList,
+    bool use16BitFormat
     )
 {
   check(IsInRenderingThread());
@@ -146,7 +147,7 @@ void FPixelReader::WritePixelsToBuffer(
   FRHITexture2D *Texture = RenderTargetResource->GetRenderTargetTexture();
   checkf(Texture != nullptr, TEXT("FPixelReader: UTextureRenderTarget2D missing render target texture"));
 
-  const uint32 BytesPerPixel = 4u; // PF_R8G8B8A8
+  const uint32 BytesPerPixel = use16BitFormat ? 8u : 4u; // PF_R8G8B8A8 or PF_FloatRGBA
   const uint32 Width = Texture->GetSizeX();
   const uint32 Height = Texture->GetSizeY();
   const uint32 ExpectedStride = Width * BytesPerPixel;

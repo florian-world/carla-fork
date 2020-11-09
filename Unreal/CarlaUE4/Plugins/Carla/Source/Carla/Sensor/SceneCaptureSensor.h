@@ -63,6 +63,18 @@ public:
   }
 
   UFUNCTION(BlueprintCallable)
+  void Enable16BitFormat(bool Enable = false)
+  {
+    bEnable16BitFormat = Enable;
+  }
+
+  UFUNCTION(BlueprintCallable)
+  bool Is16BitFormatEnabled() const
+  {
+    return bEnable16BitFormat;
+  }
+
+  UFUNCTION(BlueprintCallable)
   void SetFOVAngle(float FOVAngle);
 
   UFUNCTION(BlueprintCallable)
@@ -306,5 +318,9 @@ protected:
   /// Whether to render the post-processing effects present in the scene.
   UPROPERTY(EditAnywhere)
   bool bEnablePostProcessingEffects = true;
+
+  /// Whether to change render target format to PF_FloatRGBA, offering 16bit / channel
+  UPROPERTY(EditAnywhere)
+  bool bEnable16BitFormat = false;
 
 };

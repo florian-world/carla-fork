@@ -62,7 +62,7 @@ public:
   ///
   /// @pre To be called from game-thread.
   template <typename TSensor>
-  static void SendPixelsInRenderThread(TSensor &Sensor);
+  static void SendPixelsInRenderThread(TSensor &Sensor, bool use16BitFormat = false);
 
 private:
 
@@ -73,7 +73,7 @@ private:
       UTextureRenderTarget2D &RenderTarget,
       carla::Buffer &Buffer,
       uint32 Offset,
-      FRHICommandListImmediate &InRHICmdList);
+      FRHICommandListImmediate &InRHICmdList, bool use16BitFormat = false);
 
 };
 
@@ -82,7 +82,7 @@ private:
 // =============================================================================
 
 template <typename TSensor>
-void FPixelReader::SendPixelsInRenderThread(TSensor &Sensor)
+void FPixelReader::SendPixelsInRenderThread(TSensor &Sensor, bool use16BitFormat)
 {
   check(Sensor.CaptureRenderTarget != nullptr);
 
@@ -96,7 +96,7 @@ void FPixelReader::SendPixelsInRenderThread(TSensor &Sensor)
   // game-thread.
   ENQUEUE_RENDER_COMMAND(FWritePixels_SendPixelsInRenderThread)
   (
-    [&Sensor, Stream=Sensor.GetDataStream(Sensor)](auto &InRHICmdList) mutable
+    [&Sensor, Stream=Sensor.GetDataStream(Sensor), use16BitFormat](auto &InRHICmdList) mutable
     {
       /// @todo Can we make sure the sensor is not going to be destroyed?
       if (!Sensor.IsPendingKill())
@@ -106,7 +106,7 @@ void FPixelReader::SendPixelsInRenderThread(TSensor &Sensor)
             *Sensor.CaptureRenderTarget,
             Buffer,
             carla::sensor::SensorRegistry::get<TSensor *>::type::header_offset,
-            InRHICmdList);
+            InRHICmdList, use16BitFormat);
 
         if(Buffer.data())
         {
