@@ -16,6 +16,8 @@ namespace data {
   /// An image of 32-bit BGRA colors.
   using Image = ImageTmpl<Color>;
 
+  using Image16bit = ImageTmpl<Color16bit>;
+
 } // namespace data
 } // namespace sensor
 } // namespace carla

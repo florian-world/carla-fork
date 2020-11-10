@@ -19,6 +19,7 @@
 #include "carla/sensor/s11n/EpisodeStateSerializer.h"
 #include "carla/sensor/s11n/GnssSerializer.h"
 #include "carla/sensor/s11n/ImageSerializer.h"
+#include "carla/sensor/s11n/Image16bitSerializer.h"
 #include "carla/sensor/s11n/IMUSerializer.h"
 #include "carla/sensor/s11n/LidarSerializer.h"
 #include "carla/sensor/s11n/NoopSerializer.h"
@@ -56,7 +57,7 @@ namespace sensor {
   using SensorRegistry = CompositeSerializer<
     std::pair<ACollisionSensor *, s11n::CollisionEventSerializer>,
     std::pair<ADepthCamera *, s11n::ImageSerializer>,
-    std::pair<AOpticalFlowCamera *, s11n::ImageSerializer>,
+    std::pair<AOpticalFlowCamera *, s11n::Image16bitSerializer>,
     std::pair<ADVSCamera *, s11n::DVSEventArraySerializer>,
     std::pair<AGnssSensor *, s11n::GnssSerializer>,
     std::pair<AInertialMeasurementUnit *, s11n::IMUSerializer>,
