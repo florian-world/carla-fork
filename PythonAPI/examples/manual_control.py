@@ -60,6 +60,8 @@ import glob
 import os
 import sys
 
+import cv2
+
 try:
     sys.path.append(glob.glob('../carla/dist/carla-*%d.%d-%s.egg' % (
         sys.version_info.major,
@@ -1014,12 +1016,32 @@ class CameraManager(object):
             dvs_img[dvs_events[:]['y'], dvs_events[:]['x'], dvs_events[:]['pol'] * 2] = 255
             self.surface = pygame.surfarray.make_surface(dvs_img.swapaxes(0, 1))
         elif self.sensors[self.index][0].startswith('sensor.camera.optical_flow'):
-            array = np.frombuffer(image.raw_data, dtype=np.dtype("float16"))
+            # print(image)
+            array = np.frombuffer(image.raw_data, dtype=np.uint16)
             array = np.reshape(array, (image.height, image.width, 4))
-            array = array[:, :, :3]
-            array = array[:, :, ::-1]
-            array = np.array(np.round(array*255), dtype=np.dtype("uint8"))
-            self.surface = pygame.surfarray.make_surface(array.swapaxes(0, 1))
+            # print(array)
+            # np.save("of_output_frame.npy", array)
+
+            img_out = array[:, :, :3]
+            img_out = img_out[:, :, ::-1]
+            img_out = np.array(np.floor(img_out / 256), dtype=np.dtype("uint8"))
+
+            for y in range(12, len(array), 25):
+                for x in range(12, len(array[0]), 25):
+                    vel = ((array[y][x][0] - 32767)*(4 * image.width / 65535),
+                           (32767 - array[y][x][1])*(4 * image.height / 65535))
+
+                    p = (x, y)
+                    CameraManager.draw_arrow(img_out, p, vel)
+
+            # point_along_width = 400
+            # point_along_height = 300
+            # vel_along_width = 300
+            # vel_along_height = -100
+            #
+            # CameraManager.draw_arrow(img_out, (point_along_width, point_along_height), (vel_along_width, vel_along_height))
+
+            self.surface = pygame.surfarray.make_surface(img_out.swapaxes(0, 1))
         else:
             image.convert(self.sensors[self.index][1])
             array = np.frombuffer(image.raw_data, dtype=np.dtype("uint8"))
@@ -1029,6 +1051,28 @@ class CameraManager(object):
             self.surface = pygame.surfarray.make_surface(array.swapaxes(0, 1))
         if self.recording:
             image.save_to_disk('_out/%08d' % image.frame)
+
+    @staticmethod
+    def draw_arrow(img_out, p, vel):
+        vel_norm = np.linalg.norm(vel)
+        if vel_norm < 2:
+            return
+        spin_size = 0.3*np.linalg.norm(vel_norm)
+        p2 = [sum(x) for x in zip(p, vel)]
+        delta = [x2 - x for x2, x in zip(p2, p)]
+        p2 = tuple(np.round(p2).astype(int))
+        # cv2.line()
+        cv2.line(img_out, p, p2, (220, 220, 220), thickness=1, lineType=cv2.LINE_AA)
+        # cvLine(resultDenseOpticalFlow, p, p2, CV_RGB(220, 220, 220), 1, CV_AA);
+        angle = np.arctan2(delta[1], delta[0])
+        p = (p2[0] - spin_size * np.cos(angle + np.pi / 4),
+             p2[1] - spin_size * np.sin(angle + np.pi / 4))
+        p = tuple(np.round(p).astype(int))
+        cv2.line(img_out, p, p2, (220, 220, 220), thickness=1, lineType=cv2.LINE_AA)
+        p = (p2[0] - spin_size * np.cos(angle - np.pi / 4),
+             p2[1] - spin_size * np.sin(angle - np.pi / 4))
+        p = tuple(np.round(p).astype(int))
+        cv2.line(img_out, p, p2, (220, 220, 220), thickness=1, lineType=cv2.LINE_AA)
 
 
 # ==============================================================================
