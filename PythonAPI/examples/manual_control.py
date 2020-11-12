@@ -1028,8 +1028,8 @@ class CameraManager(object):
 
             for y in range(12, len(array), 25):
                 for x in range(12, len(array[0]), 25):
-                    vel = ((array[y][x][0] - 32767)*(4 * image.width / 65535),
-                           (32767 - array[y][x][1])*(4 * image.height / 65535))
+                    vel = ((array[y][x][0] - 32767)*(2 * image.width / 65535),
+                           (32767 - array[y][x][1])*(2 * image.height / 65535))
 
                     p = (x, y)
                     CameraManager.draw_arrow(img_out, p, vel)
@@ -1055,7 +1055,7 @@ class CameraManager(object):
     @staticmethod
     def draw_arrow(img_out, p, vel):
         vel_norm = np.linalg.norm(vel)
-        if vel_norm < 2:
+        if vel_norm < 1:
             return
         spin_size = 0.3*np.linalg.norm(vel_norm)
         p2 = [sum(x) for x in zip(p, vel)]
