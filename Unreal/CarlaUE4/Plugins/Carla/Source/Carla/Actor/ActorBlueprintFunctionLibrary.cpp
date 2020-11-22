@@ -360,6 +360,18 @@ void UActorBlueprintFunctionLibrary::MakeCameraDefinition(
   LensYSize.RecommendedValues = { TEXT("0.08") };
   LensYSize.bRestrictToRecommended = false;
 
+  FActorVariation EnableRenderRateFactor;
+  EnableRenderRateFactor.Id = TEXT("enable_render_rate_factor");
+  EnableRenderRateFactor.Type = EActorAttributeType::Bool;
+  EnableRenderRateFactor.RecommendedValues = { TEXT("false") };
+  EnableRenderRateFactor.bRestrictToRecommended = false;
+
+  FActorVariation RenderRateFactor;
+  RenderRateFactor.Id = TEXT("render_rate_factor");
+  RenderRateFactor.Type = EActorAttributeType::Int;
+  RenderRateFactor.RecommendedValues = { TEXT("1") };
+  RenderRateFactor.bRestrictToRecommended = false;
+
   Definition.Variations.Append({
       ResX,
       ResY,
@@ -369,7 +381,9 @@ void UActorBlueprintFunctionLibrary::MakeCameraDefinition(
       LensK,
       LensKcube,
       LensXSize,
-      LensYSize});
+      LensYSize,
+      EnableRenderRateFactor,
+      RenderRateFactor});
 
   if (bEnableModifyingPostProcessEffects)
   {
@@ -1371,6 +1385,13 @@ void UActorBlueprintFunctionLibrary::SetCamera(
       RetrieveActorAttributeToInt("image_size_y", Description.Variations, 600));
   Camera->SetFOVAngle(
       RetrieveActorAttributeToFloat("fov", Description.Variations, 90.0f));
+
+  Camera->EnableRenderRateFactor(
+      RetrieveActorAttributeToBool("enable_render_rate_factor", Description.Variations, false));
+
+  Camera->SetRenderRateFactor(
+      RetrieveActorAttributeToInt("render_rate_factor", Description.Variations, 1));
+
   if (Description.Variations.Contains("enable_postprocess_effects"))
   {
     Camera->EnablePostProcessingEffects(

@@ -476,6 +476,18 @@ void ASceneCaptureSensor::BeginPlay()
   CaptureComponent2D->CaptureSource = ESceneCaptureSource::SCS_FinalColorLDR;
 
   CaptureComponent2D->UpdateContent();
+
+  if (bEnableRenderRateFactor) {
+    _framesSkipped = 0;
+    CaptureComponent2D->bAlwaysPersistRenderingState = true;
+    CaptureComponent2D->bCaptureEveryFrame = false;
+    CaptureComponent2D->bCaptureOnMovement = false;
+  } else {
+    CaptureComponent2D->bCaptureEveryFrame = true;
+    CaptureComponent2D->bCaptureOnMovement = true;
+  }
+
+
   CaptureComponent2D->Activate();
 
   // Make sure that there is enough time in the render queue.
@@ -497,6 +509,15 @@ void ASceneCaptureSensor::BeginPlay()
 
 void ASceneCaptureSensor::Tick(float DeltaTime)
 {
+  if (bEnableRenderRateFactor) {
+    if (_framesSkipped == 0) {
+      CaptureComponent2D->CaptureScene();
+    }
+
+    _framesSkipped = (_framesSkipped + 1) % RenderRateFactor;
+  }
+
+
   Super::Tick(DeltaTime);
 
   // Add the view information every tick. Its only used for one tick and then
