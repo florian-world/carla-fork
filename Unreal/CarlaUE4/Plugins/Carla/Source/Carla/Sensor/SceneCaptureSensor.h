@@ -316,7 +316,7 @@ protected:
 
   virtual void SetUpSceneCaptureComponent(USceneCaptureComponent2D &SceneCapture) {}
 
-  virtual void SendPixels(UWorld *World, ELevelTick TickType, float DeltaSeconds) {}
+  virtual void SendPixels(float DeltaSeconds);
 
   FDelegateHandle SendPixelsDelegate;
 
