@@ -67,6 +67,10 @@ ASceneCaptureSensor::ASceneCaptureSensor(const FObjectInitializer &ObjectInitial
   CaptureComponent2D->SetupAttachment(RootComponent);
   CaptureComponent2D->PrimitiveRenderMode = ESceneCapturePrimitiveRenderMode::PRM_RenderScenePrimitives;
 
+  CaptureComponent2D->bCaptureOnMovement = false;
+  CaptureComponent2D->bCaptureEveryFrame = false;
+  CaptureComponent2D->bAlwaysPersistRenderingState = true;
+
   SceneCaptureSensor_local_ns::SetCameraDefaultOverrides(*CaptureComponent2D);
 
   ++SCENE_CAPTURE_COUNTER;
@@ -450,6 +454,11 @@ float ASceneCaptureSensor::GetChromAberrOffset() const
   return CaptureComponent2D->PostProcessSettings.ChromaticAberrationStartOffset;
 }
 
+void ASceneCaptureSensor::EnqueueRenderSceneImmediate() {
+  // Creates an snapshot of the scene, requieres bCaptureEveryFrame = false.
+  CaptureComponent2D->CaptureScene();
+}
+
 void ASceneCaptureSensor::BeginPlay()
 {
   UE_LOG(LogCarla, Display, TEXT("Beginning play with the following update rate: %.3f. "\
@@ -502,8 +511,8 @@ void ASceneCaptureSensor::BeginPlay()
   SceneCaptureSensor_local_ns::ConfigureShowFlags(CaptureComponent2D->ShowFlags,
       bEnablePostProcessingEffects);
 
-  // This ensures the camera is always spawning the rain drops in case the
-  // weather was previously set to has rain
+  // This ensures the camera is always spawning the raindrops in case the
+  // weather was previously set to have rain.
   GetEpisode().GetWeather()->NotifyWeather();
 
   Super::BeginPlay();
@@ -511,35 +520,38 @@ void ASceneCaptureSensor::BeginPlay()
 //  SendPixelsDelegate = FWorldDelegates::OnWorldPostActorTick.AddUObject(this, &ASceneCaptureSensor::SendPixels);
 }
 
-void ASceneCaptureSensor::SendPixels(float DeltaSeconds) {
-//  UE_LOG(LogCarla, Display, TEXT("Sending pixels in SceneCaptureSensor with delta time: %.3f. "), DeltaSeconds);
-}
-
-
-void ASceneCaptureSensor::Tick(float DeltaTime)
+void ASceneCaptureSensor::PrePhysTick(float DeltaSeconds)
 {
-  Super::Tick(DeltaTime);
+  Super::PrePhysTick(DeltaSeconds);
 
 //  UE_LOG(LogCarla, Display, TEXT("Ticking here in SceneCaptureSensor with delta time: %.3f. "), DeltaTime);
 
-  // Add the view information every tick. Its only used for one tick and then
+  // Add the view information every tick. It's only used for one tick and then
   // removed by the streamer.
   IStreamingManager::Get().AddViewInformation(
       CaptureComponent2D->GetComponentLocation(),
       ImageWidth,
       ImageWidth / FMath::Tan(CaptureComponent2D->FOVAngle));
 
+  // Allows the sensor to tick with the tick rate from UE4.
+  ReadyToCapture = true;
+}
 
-  if (bEnableRenderRateFactor) {
-    if (_framesSkipped == 0) {
-      CaptureComponent2D->CaptureScene();
-      SendPixels(DeltaTime);
-    }
+void ASceneCaptureSensor::PostPhysTick(UWorld *World, ELevelTick TickType, float DeltaTime)
+{
+  Super::PostPhysTick(World, TickType, DeltaTime);
+  ReadyToCapture = true;
 
-    _framesSkipped = (_framesSkipped + 1) % RenderRateFactor;
-  } else {
-    SendPixels(DeltaTime);
-  }
+//  if (bEnableRenderRateFactor) {
+//    if (_framesSkipped == 0) {
+//      CaptureComponent2D->CaptureScene();
+//      SendPixels(DeltaTime);
+//    }
+//
+//    _framesSkipped = (_framesSkipped + 1) % RenderRateFactor;
+//  } else {
+//    SendPixels(DeltaTime);
+//  }
 }
 
 void ASceneCaptureSensor::EndPlay(const EEndPlayReason::Type EndPlayReason)

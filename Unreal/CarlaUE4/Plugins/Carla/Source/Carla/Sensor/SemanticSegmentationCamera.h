@@ -26,5 +26,5 @@ public:
 
 protected:
 
-  void SendPixels(float DeltaSeconds) override;
+  void PostPhysTick(UWorld *World, ELevelTick TickType, float DeltaSeconds) override;
 };

@@ -28,8 +28,11 @@ ADepthCamera::ADepthCamera(const FObjectInitializer &ObjectInitializer)
   );
 }
 
-void ADepthCamera::SendPixels(float DeltaSeconds)
+void ADepthCamera::PostPhysTick(UWorld *World, ELevelTick TickType, float DeltaSeconds)
 {
-  Super::SendPixels(DeltaSeconds);
-  FPixelReader::SendPixelsInRenderThread(*this);
+  if(ReadyToCapture)
+  {
+    FPixelReader::SendPixelsInRenderThread(*this);
+    ReadyToCapture = false;
+  }
 }
