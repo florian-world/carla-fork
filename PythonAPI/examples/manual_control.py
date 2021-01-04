@@ -151,6 +151,59 @@ def get_actor_display_name(actor, truncate=250):
     name = ' '.join(actor.type_id.replace('_', '.').title().split('.')[1:])
     return (name[:truncate - 1] + u'\u2026') if len(name) > truncate else name
 
+# ==============================================================================
+# -- UTILS ---------------------------------------------------------------------
+# ==============================================================================
+
+
+def draw_arrow_with_cv2(img_out, p, vel):
+    vel_norm = np.linalg.norm(vel)
+    if vel_norm < 1:
+        return
+    spin_size = 0.3*np.linalg.norm(vel_norm)
+    p2 = [sum(x) for x in zip(p, vel)]
+    delta = [x2 - x for x2, x in zip(p2, p)]
+    p2 = tuple(np.round(p2).astype(int))
+    # cv2.line()
+    cv2.line(img_out, p, p2, (220, 220, 220), thickness=1, lineType=cv2.LINE_AA)
+    # cvLine(resultDenseOpticalFlow, p, p2, CV_RGB(220, 220, 220), 1, CV_AA);
+    angle = np.arctan2(delta[1], delta[0])
+    p = (p2[0] - spin_size * np.cos(angle + np.pi / 4),
+         p2[1] - spin_size * np.sin(angle + np.pi / 4))
+    p = tuple(np.round(p).astype(int))
+    cv2.line(img_out, p, p2, (220, 220, 220), thickness=1, lineType=cv2.LINE_AA)
+    p = (p2[0] - spin_size * np.cos(angle - np.pi / 4),
+         p2[1] - spin_size * np.sin(angle - np.pi / 4))
+    p = tuple(np.round(p).astype(int))
+    cv2.line(img_out, p, p2, (220, 220, 220), thickness=1, lineType=cv2.LINE_AA)
+
+
+def render_optical_flow_data(data):
+    intensity = np.linalg.norm(data, axis=2)
+    angle = np.arctan2(data[:, :, 0], data[:, :, 1])
+    max_intensity = 100
+    # N.B.: an intensity of exactly 1.0 makes the output black (perhaps showing the over-saturation), so keep it < 1
+    intensity = np.clip(intensity, 0, max_intensity - 1) / max_intensity
+    # log scaling
+    basis = 30
+    intensity = np.log1p((basis - 1) * intensity) / np.log1p(basis - 1)
+    # for the angle they use 360° scale, see https://stackoverflow.com/a/57203497/14467327
+    angle = (np.pi + angle) * 360 / (2 * np.pi)
+    # print(F"Ranges, angle: [{np.min(angle)}, {np.max(angle)}], "
+    #       F"intensity: [{np.min(intensity)}, {np.max(intensity)}]")
+    intensity = intensity[:, :, np.newaxis]
+    angle = angle[:, :, np.newaxis]
+    hsv_img = np.concatenate((angle, np.ones_like(intensity), intensity), axis=2)
+    img_out = np.array(cv2.cvtColor(np.array(hsv_img, dtype=np.float32), cv2.COLOR_HSV2RGB) * 256,
+                       dtype=np.dtype("uint8"))
+    for y in range(12, len(data), 25):
+        for x in range(12, len(data[0]), 25):
+            vel = (data[y][x][0], data[y][x][1])
+
+            p = (x, y)
+            draw_arrow_with_cv2(img_out, p, vel)
+    return img_out
+
 
 # ==============================================================================
 # -- World ---------------------------------------------------------------------
@@ -1019,27 +1072,12 @@ class CameraManager(object):
             # print(image)
             array = np.frombuffer(image.raw_data, dtype=np.uint16)
             array = np.reshape(array, (image.height, image.width, 4))
-            # print(array)
-            # np.save("of_output_frame.npy", array)
 
-            img_out = array[:, :, :3]
-            img_out = img_out[:, :, ::-1]
-            img_out = np.array(np.floor(img_out / 256), dtype=np.dtype("uint8"))
+            data_array = np.array(array[:, :, 0:2], dtype=np.float32)
+            data_array[:, :, 0] = (data_array[:, :, 0] - 32767) * (2 * image.width / 65535)
+            data_array[:, :, 1] = (32767 - data_array[:, :, 1]) * (2 * image.height / 65535)
 
-            for y in range(12, len(array), 25):
-                for x in range(12, len(array[0]), 25):
-                    vel = ((array[y][x][0] - 32767)*(2 * image.width / 65535),
-                           (32767 - array[y][x][1])*(2 * image.height / 65535))
-
-                    p = (x, y)
-                    CameraManager.draw_arrow(img_out, p, vel)
-
-            # point_along_width = 400
-            # point_along_height = 300
-            # vel_along_width = 300
-            # vel_along_height = -100
-            #
-            # CameraManager.draw_arrow(img_out, (point_along_width, point_along_height), (vel_along_width, vel_along_height))
+            img_out = render_optical_flow_data(data_array)
 
             self.surface = pygame.surfarray.make_surface(img_out.swapaxes(0, 1))
         else:
@@ -1051,28 +1089,6 @@ class CameraManager(object):
             self.surface = pygame.surfarray.make_surface(array.swapaxes(0, 1))
         if self.recording:
             image.save_to_disk('_out/%08d' % image.frame)
-
-    @staticmethod
-    def draw_arrow(img_out, p, vel):
-        vel_norm = np.linalg.norm(vel)
-        if vel_norm < 1:
-            return
-        spin_size = 0.3*np.linalg.norm(vel_norm)
-        p2 = [sum(x) for x in zip(p, vel)]
-        delta = [x2 - x for x2, x in zip(p2, p)]
-        p2 = tuple(np.round(p2).astype(int))
-        # cv2.line()
-        cv2.line(img_out, p, p2, (220, 220, 220), thickness=1, lineType=cv2.LINE_AA)
-        # cvLine(resultDenseOpticalFlow, p, p2, CV_RGB(220, 220, 220), 1, CV_AA);
-        angle = np.arctan2(delta[1], delta[0])
-        p = (p2[0] - spin_size * np.cos(angle + np.pi / 4),
-             p2[1] - spin_size * np.sin(angle + np.pi / 4))
-        p = tuple(np.round(p).astype(int))
-        cv2.line(img_out, p, p2, (220, 220, 220), thickness=1, lineType=cv2.LINE_AA)
-        p = (p2[0] - spin_size * np.cos(angle - np.pi / 4),
-             p2[1] - spin_size * np.sin(angle - np.pi / 4))
-        p = tuple(np.round(p).astype(int))
-        cv2.line(img_out, p, p2, (220, 220, 220), thickness=1, lineType=cv2.LINE_AA)
 
 
 # ==============================================================================
