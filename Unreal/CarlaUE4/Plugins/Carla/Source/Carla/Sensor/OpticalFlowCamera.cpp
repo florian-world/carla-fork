@@ -25,8 +25,11 @@ AOpticalFlowCamera::AOpticalFlowCamera(const FObjectInitializer &ObjectInitializ
           TEXT("Material'/Carla/PostProcessingMaterials/VelocityMaterial.VelocityMaterial'"));
 }
 
-void AOpticalFlowCamera::SendPixels(float DeltaSeconds)
+void AOpticalFlowCamera::PostPhysTick(UWorld *World, ELevelTick TickType, float DeltaSeconds)
 {
-  Super::SendPixels(DeltaSeconds);
-  FPixelReader::SendPixelsInRenderThread(*this, true);
+  if(ReadyToCapture)
+  {
+    FPixelReader::SendPixelsInRenderThread(*this, true);
+    ReadyToCapture = false;
+  }
 }
