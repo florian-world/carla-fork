@@ -76,30 +76,6 @@ public:
   }
 
   UFUNCTION(BlueprintCallable)
-  void EnableRenderRateFactor(bool Enable = false)
-  {
-    bEnableRenderRateFactor = Enable;
-  }
-
-  UFUNCTION(BlueprintCallable)
-  bool IsRenderRateFactorEnabled() const
-  {
-    return bEnableRenderRateFactor;
-  }
-
-  UFUNCTION(BlueprintCallable)
-  void SetRenderRateFactor(int renderRateFactor)
-  {
-    RenderRateFactor = renderRateFactor;
-  }
-
-  UFUNCTION(BlueprintCallable)
-  int GetRenderRateFactor() const
-  {
-    return RenderRateFactor;
-  }
-
-  UFUNCTION(BlueprintCallable)
   void SetFOVAngle(float FOVAngle);
 
   UFUNCTION(BlueprintCallable)
@@ -358,16 +334,6 @@ protected:
   /// Whether to change render target format to PF_A16B16G16R16, offering 16bit / channel
   UPROPERTY(EditAnywhere)
   bool bEnable16BitFormat = false;
-
-  /// Capture the scene every nth tick. E.g. if RenderRateFactor = 2, only every second frame will be captured
-  UPROPERTY(EditAnywhere)
-  int RenderRateFactor = 1;
-
-  /// Enable manual frame triggering
-  UPROPERTY(EditAnywhere)
-  bool bEnableRenderRateFactor = false;
-
-  int _framesSkipped = 0;
 
   FRenderCommandFence RenderFence;
 

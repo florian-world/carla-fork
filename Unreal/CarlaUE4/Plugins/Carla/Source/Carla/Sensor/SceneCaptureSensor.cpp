@@ -461,11 +461,6 @@ void ASceneCaptureSensor::EnqueueRenderSceneImmediate() {
 
 void ASceneCaptureSensor::BeginPlay()
 {
-  UE_LOG(LogCarla, Display, TEXT("Beginning play with the following update rate: %.3f. "\
-                                    "the component has this update rate: %.3f and is '%s'"),
-              GetActorTickInterval(), CaptureComponent2D->GetComponentTickInterval(),
-              CaptureComponent2D->IsComponentTickEnabled() ? *FString("enabled") : *FString("disabled"));
-
   using namespace SceneCaptureSensor_local_ns;
 
   // Determine the gamma of the player.
@@ -490,17 +485,6 @@ void ASceneCaptureSensor::BeginPlay()
   CaptureComponent2D->CaptureSource = ESceneCaptureSource::SCS_FinalColorLDR;
 
   CaptureComponent2D->UpdateContent();
-
-  if (bEnableRenderRateFactor) {
-    _framesSkipped = 0;
-    CaptureComponent2D->bAlwaysPersistRenderingState = true;
-    CaptureComponent2D->bCaptureEveryFrame = false;
-    CaptureComponent2D->bCaptureOnMovement = false;
-  } else {
-    CaptureComponent2D->bCaptureEveryFrame = true;
-    CaptureComponent2D->bCaptureOnMovement = true;
-  }
-
   CaptureComponent2D->Activate();
 
   // Make sure that there is enough time in the render queue.
@@ -516,15 +500,11 @@ void ASceneCaptureSensor::BeginPlay()
   GetEpisode().GetWeather()->NotifyWeather();
 
   Super::BeginPlay();
-
-//  SendPixelsDelegate = FWorldDelegates::OnWorldPostActorTick.AddUObject(this, &ASceneCaptureSensor::SendPixels);
 }
 
 void ASceneCaptureSensor::PrePhysTick(float DeltaSeconds)
 {
   Super::PrePhysTick(DeltaSeconds);
-
-//  UE_LOG(LogCarla, Display, TEXT("Ticking here in SceneCaptureSensor with delta time: %.3f. "), DeltaTime);
 
   // Add the view information every tick. It's only used for one tick and then
   // removed by the streamer.
@@ -541,25 +521,12 @@ void ASceneCaptureSensor::PostPhysTick(UWorld *World, ELevelTick TickType, float
 {
   Super::PostPhysTick(World, TickType, DeltaTime);
   ReadyToCapture = true;
-
-//  if (bEnableRenderRateFactor) {
-//    if (_framesSkipped == 0) {
-//      CaptureComponent2D->CaptureScene();
-//      SendPixels(DeltaTime);
-//    }
-//
-//    _framesSkipped = (_framesSkipped + 1) % RenderRateFactor;
-//  } else {
-//    SendPixels(DeltaTime);
-//  }
 }
 
 void ASceneCaptureSensor::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
   Super::EndPlay(EndPlayReason);
   SCENE_CAPTURE_COUNTER = 0u;
-
-//  FWorldDelegates::OnWorldPostActorTick.Remove(SendPixelsDelegate);
 }
 
 // =============================================================================
