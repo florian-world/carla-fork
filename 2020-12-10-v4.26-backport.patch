@@ -1,0 +1,596 @@
+diff --git a/Engine/Shaders/Private/BasePassPixelShader.usf b/Engine/Shaders/Private/BasePassPixelShader.usf
+index be4ad2999..abaa23f23 100644
+--- a/Engine/Shaders/Private/BasePassPixelShader.usf
++++ b/Engine/Shaders/Private/BasePassPixelShader.usf
+@@ -960,17 +960,23 @@ ShadingModel);
+ 
+ #if WRITES_VELOCITY_TO_GBUFFER
+ 	BRANCH
+-	if (GetPrimitiveData(MaterialParameters.PrimitiveId).OutputVelocity>0)
++	if (GetPrimitiveData(MaterialParameters.PrimitiveId).OutputVelocity>0 || View.ForceDrawAllVelocities != 0)
+ 	{
+ 		// 2d velocity, includes camera an object motion
+ 	#if WRITES_VELOCITY_TO_GBUFFER_USE_POS_INTERPOLATOR
+-		float2 Velocity = Calculate2DVelocity(BasePassInterpolants.VelocityScreenPosition, BasePassInterpolants.VelocityPrevScreenPosition);
++		float3 Velocity = Calculate3DVelocity(BasePassInterpolants.VelocityScreenPosition, BasePassInterpolants.VelocityPrevScreenPosition);
+ 	#else
+-		float2 Velocity = Calculate2DVelocity(MaterialParameters.ScreenPosition, BasePassInterpolants.VelocityPrevScreenPosition);
++		float3 Velocity = Calculate3DVelocity(MaterialParameters.ScreenPosition, BasePassInterpolants.VelocityPrevScreenPosition);
+ 	#endif
+ 
+-		// Make sure not to touch 0,0 which is clear color
+-		float4 EncodedVelocity = float4(EncodeVelocityToTexture(Velocity) * GetPrimitiveData(MaterialParameters.PrimitiveId).DrawsVelocity, 0, 0);
++		float4 EncodedVelocity = EncodeVelocityToTexture(Velocity);
++
++		FLATTEN
++		if (GetPrimitiveData(MaterialParameters.PrimitiveId).DrawsVelocity == 0.0 && View.ForceDrawAllVelocities == 0)
++		{
++			// TODO: remove one of the DrawsVelocity or OutputVelocity
++			EncodedVelocity = 0.0;
++		}
+ 	#if USES_GBUFFER
+ 		GBuffer.Velocity = EncodedVelocity;
+ 	#else
+diff --git a/Engine/Shaders/Private/BasePassVertexShader.usf b/Engine/Shaders/Private/BasePassVertexShader.usf
+index b937f1a42..393b9fb0b 100644
+--- a/Engine/Shaders/Private/BasePassVertexShader.usf
++++ b/Engine/Shaders/Private/BasePassVertexShader.usf
+@@ -201,7 +201,7 @@ void Main(
+ 	{
+ 		float4 PrevTranslatedWorldPosition = float4(0, 0, 0, 1);
+ 		BRANCH
+-		if (GetPrimitiveData(VFIntermediates.PrimitiveId).OutputVelocity>0)
++		if (GetPrimitiveData(VFIntermediates.PrimitiveId).OutputVelocity>0 || View.ForceDrawAllVelocities != 0)
+ 		{
+ 			PrevTranslatedWorldPosition = VertexFactoryGetPreviousWorldPosition( Input, VFIntermediates );	
+ 			VertexParameters = GetMaterialVertexParameters(Input, VFIntermediates, PrevTranslatedWorldPosition.xyz, TangentToLocal);
+diff --git a/Engine/Shaders/Private/Common.ush b/Engine/Shaders/Private/Common.ush
+index d48943443..eb1c9d2d2 100644
+--- a/Engine/Shaders/Private/Common.ush
++++ b/Engine/Shaders/Private/Common.ush
+@@ -1628,20 +1628,31 @@ struct FScreenVertexOutput
+ // for velocity rendering, motionblur and temporal AA
+ // velocity needs to support -2..2 screen space range for x and y
+ // texture is 16bit 0..1 range per channel
+-float2 EncodeVelocityToTexture(float2 In)
++float4 EncodeVelocityToTexture(float3 V)
+ {
+-	// 0.499f is a value smaller than 0.5f to avoid using the full range to use the clear color (0,0) as special value
+-	// 0.5f to allow for a range of -2..2 instead of -1..1 for really fast motions for temporal AA
+-	return In * (0.499f * 0.5f) + 32767.0f / 65535.0f;
++  // 0.499f is a value smaller than 0.5f to avoid using the full range to use the clear color (0,0) as special value
++  // 0.5f to allow for a range of -2..2 instead of -1..1 for really fast motions for temporal AA
++  float4 EncodedV;
++  EncodedV.xy = V.xy * (0.499f * 0.5f) + 32767.0f / 65535.0f;
++
++  uint Vz = asuint(V.z);
++
++  EncodedV.z = saturate(float((Vz >> 16) & 0xFFFF) * rcp(65535.0f) + (0.1 / 65535.0f));
++  EncodedV.w = saturate(float((Vz >>  0) & 0xFFFF) * rcp(65535.0f) + (0.1 / 65535.0f));
++
++  return EncodedV;
+ }
+ // see EncodeVelocityToTexture()
+-float2 DecodeVelocityFromTexture(float2 In)
++float3 DecodeVelocityFromTexture(float4 EncodedV)
+ {
+-	const float InvDiv = 1.0f / (0.499f * 0.5f);
+-	// reference
+-//	return (In - 32767.0f / 65535.0f ) / (0.499f * 0.5f);
+-	// MAD layout to help compiler
+-	return In * InvDiv - 32767.0f / 65535.0f * InvDiv;
++  const float InvDiv = 1.0f / (0.499f * 0.5f);
++
++  float3 V;
++
++  V.xy = EncodedV.xy * InvDiv - 32767.0f / 65535.0f * InvDiv;
++  V.z = asfloat((uint(round(EncodedV.z * 65535.0f)) << 16) | uint(round(EncodedV.w * 65535.0f)));
++
++  return V;
+ }
+ 
+ // Used for the Global Illumination in the GIReplace material expression
+diff --git a/Engine/Shaders/Private/DistanceFieldLightingPost.usf b/Engine/Shaders/Private/DistanceFieldLightingPost.usf
+index 5a1d95759..4ec88cf30 100644
+--- a/Engine/Shaders/Private/DistanceFieldLightingPost.usf
++++ b/Engine/Shaders/Private/DistanceFieldLightingPost.usf
+@@ -174,11 +174,11 @@ void UpdateHistoryDepthRejectionPS(
+ 	float2 Screenvelocity = UVAndScreenPos.zw - PrevScreen;
+ 		
+ 	float2 FullResTexel = UVAndScreenPos.xy - .5f * View.BufferSizeAndInvSize.zw;
+-	float2 VelocityN = Texture2DSampleLevel(VelocityTexture, VelocityTextureSampler, FullResTexel, 0).xy;
+-		
+-	if (VelocityN.x > 0.0)
++	float4 EncodedVelocity = Texture2DSampleLevel(VelocityTexture, VelocityTextureSampler, FullResTexel, 0);
++    
++	if (EncodedVelocity.x > 0.0)
+ 	{
+-		Screenvelocity = DecodeVelocityFromTexture(VelocityN);
++		Screenvelocity = DecodeVelocityFromTexture(EncodedVelocity).xy;
+ 	}
+ 		
+ 	float PixelSpeed = 0.5 * length(Screenvelocity);
+diff --git a/Engine/Shaders/Private/HairStrands/HairStrandsMaterialPS.usf b/Engine/Shaders/Private/HairStrands/HairStrandsMaterialPS.usf
+index 10dccea80..678b75d21 100644
+--- a/Engine/Shaders/Private/HairStrands/HairStrandsMaterialPS.usf
++++ b/Engine/Shaders/Private/HairStrands/HairStrandsMaterialPS.usf
+@@ -154,8 +154,8 @@ FEvaluateOutput Evaluate(
+ 		const float4 ScreenPos		= mul(float4(Velocity_World_P.xyz, 1), ResolvedView.TranslatedWorldToClip);
+ 		const float4 PrevScreenPos	= mul(float4(Velocity_World_P_Prev.xyz, 1), ResolvedView.PrevTranslatedWorldToClip);
+ 
+-		const float2 Velocity	= Calculate2DVelocity(ScreenPos, PrevScreenPos);
+-		EncodedVelocity			= EncodeVelocityToTexture(Velocity);
++		const float2 Velocity	= Calculate3DVelocity(ScreenPos, PrevScreenPos).xy;
++		EncodedVelocity			= EncodeVelocityToTexture(float3(Velocity, 0.0)).xy;
+ 	}
+ 	#endif
+ 
+@@ -339,8 +339,8 @@ void Main(
+ 		VisibilityData.Tangent = mul(normalize(GetMaterialNormalRaw(PixelMaterialInputs)), MaterialParameters.TangentToWorld);
+ 	}
+ 	{
+-		Velocity = Calculate2DVelocity(PackedVelocityA, PackedVelocityC);
+-		EncodedVelocity = EncodeVelocityToTexture(Velocity);
++		Velocity = Calculate3DVelocity(PackedVelocityA, PackedVelocityC).xy;
++		EncodedVelocity = EncodeVelocityToTexture(float3(Velocity, 0.0)).xy;
+ 	}
+ #endif
+ #endif
+diff --git a/Engine/Shaders/Private/HairStrands/HairStrandsVelocity.usf b/Engine/Shaders/Private/HairStrands/HairStrandsVelocity.usf
+index 509415f35..1ef665ecb 100644
+--- a/Engine/Shaders/Private/HairStrands/HairStrandsVelocity.usf
++++ b/Engine/Shaders/Private/HairStrands/HairStrandsVelocity.usf
+@@ -63,7 +63,7 @@ void MainCS(uint GroupIndex : SV_GroupIndex, uint3 DispatchThreadId : SV_Dispatc
+ 			const float2 EncodedVelocity = NodeVelocity[SampleIndex];
+ 
+ 			#if PERMUTATION_VELOCITY == VELOCITY_TYPE_AVG
+-			AverageVelocity += DecodeVelocityFromTexture(EncodedVelocity);
++			AverageVelocity += DecodeVelocityFromTexture(float4(EncodedVelocity, 0.0, 0.0)).xy;
+ 			#endif			
+ 
+ 			#if PERMUTATION_VELOCITY == VELOCITY_TYPE_CLOSEST
+@@ -76,7 +76,7 @@ void MainCS(uint GroupIndex : SV_GroupIndex, uint3 DispatchThreadId : SV_Dispatc
+ 			#endif
+ 
+ 			#if PERMUTATION_VELOCITY == VELOCITY_TYPE_MAX
+-			const float2 CurrentVelocity = DecodeVelocityFromTexture(EncodedVelocity);
++			const float2 CurrentVelocity = DecodeVelocityFromTexture(float4(EncodedVelocity, 0.0, 0.0)).xy;
+ 			const float CurrentVelocityMagnitude2 = dot(CurrentVelocity, CurrentVelocity);
+ 			if (CurrentVelocityMagnitude2 > MaxVelocityMagnitude2)
+ 			{
+@@ -87,7 +87,7 @@ void MainCS(uint GroupIndex : SV_GroupIndex, uint3 DispatchThreadId : SV_Dispatc
+ 		}
+ 
+ 		#if PERMUTATION_VELOCITY == VELOCITY_TYPE_AVG
+-		OutVelocityTexture[PixelCoord] = EncodeVelocityToTexture(AverageVelocity / max(NodeDesc.Count, 1));
++		OutVelocityTexture[PixelCoord] = EncodeVelocityToTexture(float3(AverageVelocity / max(NodeDesc.Count, 1u), 0.0)).xy;
+ 		#endif		
+ 
+ 		#if PERMUTATION_VELOCITY == VELOCITY_TYPE_CLOSEST
+diff --git a/Engine/Shaders/Private/HairStrands/HairStrandsVisibilityCompaction.usf b/Engine/Shaders/Private/HairStrands/HairStrandsVisibilityCompaction.usf
+index c3c3a3418..94a513077 100644
+--- a/Engine/Shaders/Private/HairStrands/HairStrandsVisibilityCompaction.usf
++++ b/Engine/Shaders/Private/HairStrands/HairStrandsVisibilityCompaction.usf
+@@ -262,11 +262,11 @@ void MainCS(uint GroupIndex : SV_GroupIndex, uint3 DispatchThreadId : SV_Dispatc
+ 		Categorization.PixelCoverage = 1.0f - TotalTransmittance;
+ 
+ 	#if PERMUTATION_VELOCITY == VELOCITY_TYPE_AVG
+-		OutVelocityTexture[PixelCoord] = EncodeVelocityToTexture(AverageVelocity / max(ValidVelocityCount, 1));
++		OutVelocityTexture[PixelCoord] = EncodeVelocityToTexture(float3(AverageVelocity / max(ValidVelocityCount, 1), 0.0)).xy;
+ 	#elif PERMUTATION_VELOCITY == VELOCITY_TYPE_CLOSEST
+-		OutVelocityTexture[PixelCoord] = EncodeVelocityToTexture(ClosestVelocity);
++		OutVelocityTexture[PixelCoord] = EncodeVelocityToTexture(float3(ClosestVelocity, 0.0)).xy;
+ 	#elif PERMUTATION_VELOCITY == VELOCITY_TYPE_MAX
+-		OutVelocityTexture[PixelCoord] = EncodeVelocityToTexture(MaxVelocity);
++		OutVelocityTexture[PixelCoord] = EncodeVelocityToTexture(float3(MaxVelocity, 0.0)).xy;
+ 	#endif		
+ 	}
+ 
+@@ -624,8 +624,8 @@ void MainCS(uint GroupIndex : SV_GroupIndex, uint3 DispatchThreadId : SV_Dispatc
+ 						Specular);
+ 
+ 					#if PERMUTATION_VELOCITY == VELOCITY_TYPE_AVG
+-					const float2 EncodedVelocity = MSAA_VelocityTexture.Load(PixelCoord, SampleIt);
+-					AverageVelocity += DecodeVelocityFromTexture(EncodedVelocity);
++					const float4 EncodedVelocity = MSAA_VelocityTexture.Load(PixelCoord, SampleIt);
++					AverageVelocity += DecodeVelocityFromTexture(EncodedVelocity).xy;
+ 					++ValidVelocityCount;
+ 					#endif			
+ 
+@@ -641,7 +641,7 @@ void MainCS(uint GroupIndex : SV_GroupIndex, uint3 DispatchThreadId : SV_Dispatc
+ 
+ 					#if PERMUTATION_VELOCITY == VELOCITY_TYPE_MAX
+ 					const float2 EncodedVelocity = MSAA_VelocityTexture.Load(PixelCoord, SampleIt);
+-					const float2 CurrentVelocity = DecodeVelocityFromTexture(EncodedVelocity);
++					const float2 CurrentVelocity = DecodeVelocityFromTexture(float4(EncodedVelocity, 0.0, 0.0)).xy;
+ 					const float CurrentVelocityMagnitude2 = dot(CurrentVelocity, CurrentVelocity);
+ 					if (CurrentVelocityMagnitude2 > MaxVelocityMagnitude2)
+ 					{
+@@ -663,7 +663,7 @@ void MainCS(uint GroupIndex : SV_GroupIndex, uint3 DispatchThreadId : SV_Dispatc
+ 			#endif
+ 
+ 			#if PERMUTATION_VELOCITY == VELOCITY_TYPE_AVG
+-			OutVelocityTexture[PixelCoord] = EncodeVelocityToTexture(AverageVelocity / max(ValidVelocityCount, 1));
++			OutVelocityTexture[PixelCoord] = EncodeVelocityToTexture(float3(AverageVelocity / max(ValidVelocityCount, 1), 0.0)).xy;
+ 			#endif		
+ 
+ 			#if PERMUTATION_VELOCITY == VELOCITY_TYPE_CLOSEST
+diff --git a/Engine/Shaders/Private/HairStrands/HairStrandsVisibilityComposeSubPixelPS.usf b/Engine/Shaders/Private/HairStrands/HairStrandsVisibilityComposeSubPixelPS.usf
+index 77b8d0f36..7d1a86efb 100644
+--- a/Engine/Shaders/Private/HairStrands/HairStrandsVisibilityComposeSubPixelPS.usf
++++ b/Engine/Shaders/Private/HairStrands/HairStrandsVisibilityComposeSubPixelPS.usf
+@@ -38,7 +38,7 @@ void FastResolvePS(in FScreenVertexOutput Input)
+ 	for (uint SampleIt = 0; SampleIt < HAIR_VISIBILITY_MAXSAMPLECOUNT; ++SampleIt)
+ 	{
+ 		const float2 EncodedVelocity = HairVisibilityVelocityTexture.Load(PixelCoord, SampleIt);
+-		const float2 Velocity = DecodeVelocityFromTexture(EncodedVelocity);
++		const float2 Velocity = DecodeVelocityFromTexture(float4(EncodedVelocity, 0.0, 0.0)).xy;
+ 		const float VelocityMagnitude = sqrt(dot(Velocity, Velocity));
+ 		if (EncodedVelocity.x > 0 && VelocityMagnitude > VelocityThreshold)
+ 		{
+diff --git a/Engine/Shaders/Private/HairStrands/HairStrandsVisibilityPS.usf b/Engine/Shaders/Private/HairStrands/HairStrandsVisibilityPS.usf
+index a05ae7032..a5a8dee50 100644
+--- a/Engine/Shaders/Private/HairStrands/HairStrandsVisibilityPS.usf
++++ b/Engine/Shaders/Private/HairStrands/HairStrandsVisibilityPS.usf
+@@ -140,8 +140,8 @@ void MainVisibility(
+ 		VisibilityData.Tangent = mul(normalize(GetMaterialNormalRaw(PixelMaterialInputs)), MaterialParameters.TangentToWorld);
+ 	}
+ 	{
+-		Velocity = Calculate2DVelocity(PackedVelocityA, PackedVelocityC);
+-		EncodedVelocity = EncodeVelocityToTexture(Velocity);
++		Velocity = Calculate3DVelocity(PackedVelocityA, PackedVelocityC).xy;
++    	EncodedVelocity = EncodeVelocityToTexture(float3(Velocity, 0.0)).xy;
+ 	}
+ #endif
+ #endif
+diff --git a/Engine/Shaders/Private/MaterialTemplate.ush b/Engine/Shaders/Private/MaterialTemplate.ush
+index b73bf5b0a..79754a2d3 100644
+--- a/Engine/Shaders/Private/MaterialTemplate.ush
++++ b/Engine/Shaders/Private/MaterialTemplate.ush
+@@ -1677,14 +1677,15 @@ MaterialFloat4 MobileSceneTextureLookup(inout FMaterialPixelParameters Parameter
+ float2 PostProcessVelocityLookup(float Depth, float2 UV)
+ {
+ #if GBUFFER_HAS_VELOCITY
+-	float2 Velocity = Texture2DSampleLevel(SceneTexturesStruct.GBufferVelocityTexture, SceneTexturesStruct.GBufferVelocityTextureSampler, UV, 0).xy;
++	float4 EncodedVelocity = Texture2DSampleLevel(SceneTexturesStruct.GBufferVelocityTexture, SceneTexturesStruct.GBufferVelocityTextureSampler, UV, 0);
+ #else
+-	float2 Velocity = Texture2DSample(PostProcessInput_4_Texture, PostProcessInput_4_SharedSampler, UV).xy;
++	float4 EncodedVelocity = Texture2DSample(PostProcessInput_4_Texture, PostProcessInput_4_SharedSampler, UV);
+ #endif
+ 
+-	if( Velocity.x > 0.0 )
++	float2 Velocity;
++	if( EncodedVelocity.x > 0.0 )
+ 	{
+-		Velocity = DecodeVelocityFromTexture(Velocity);
++		Velocity = DecodeVelocityFromTexture(EncodedVelocity).xy;
+ 	}
+ 	else
+ 	{
+@@ -1766,7 +1767,7 @@ float4 SceneTextureLookup(float2 UV, int SceneTextureIndex, bool bFiltered)
+ 			return float4(ScreenSpaceData.GBuffer.StoredSpecular.rrr, 0);
+ #if POST_PROCESS_MATERIAL
+ 		case PPI_Velocity:
+-			return float4(PostProcessVelocityLookup(ScreenSpaceData.GBuffer.Depth, UV), 0, 0);
++			return float4(PostProcessVelocityLookup(ConvertToDeviceZ(ScreenSpaceData.GBuffer.Depth), UV), 0, 0);
+ #endif
+ 		default:
+ 			return float4(0, 0, 0, 0);
+diff --git a/Engine/Shaders/Private/PostProcessAmbientOcclusion.usf b/Engine/Shaders/Private/PostProcessAmbientOcclusion.usf
+index 68a5f0cb4..a5ff0d671 100644
+--- a/Engine/Shaders/Private/PostProcessAmbientOcclusion.usf
++++ b/Engine/Shaders/Private/PostProcessAmbientOcclusion.usf
+@@ -1594,10 +1594,10 @@ float2 ReprojectPos(float2 UV, float Depth)
+ 	float2 PrevScreen = PrevClip.xy / PrevClip.w;
+ 
+ 
+-	float2 Velocity	=  Texture2DSampleLevel(SceneVelocityTexture, SceneVelocityTextureSampler, UV,0).rg;
+-	if( Velocity.x > 0.0 )
++	float4 EncodedVelocity	=  Texture2DSampleLevel(SceneVelocityTexture, SceneVelocityTextureSampler, UV,0);
++	if( EncodedVelocity.x > 0.0 )
+ 	{
+-		PrevScreen = ThisClip.xy - DecodeVelocityFromTexture( Velocity );
++		PrevScreen = ThisClip.xy - DecodeVelocityFromTexture( EncodedVelocity ).xy;
+ 	}
+ 	
+ 	float2 PrevUV = PrevScreen.xy * PrevScreenPositionScaleBias.xy + PrevScreenPositionScaleBias.zw;
+diff --git a/Engine/Shaders/Private/PostProcessMaterialShaders.usf b/Engine/Shaders/Private/PostProcessMaterialShaders.usf
+index 972ded2e4..66ec78169 100644
+--- a/Engine/Shaders/Private/PostProcessMaterialShaders.usf
++++ b/Engine/Shaders/Private/PostProcessMaterialShaders.usf
+@@ -133,15 +133,19 @@ void MainVS(
+ 	GetMaterialCustomizedUVs(VertexParameters, CustomizedUVs);
+ 	GetCustomInterpolators(VertexParameters, CustomizedUVs);
+ 	
+-	UNROLL
+-	for (int CoordinateIndex = 0; CoordinateIndex < NUM_MATERIAL_TEXCOORDS; CoordinateIndex++)
+ 	{
+-		SetUV(Output, CoordinateIndex, InPosition.xy);
++		UNROLL
++		for (int CoordinateIndex = 0; CoordinateIndex < NUM_MATERIAL_TEXCOORDS; CoordinateIndex++)
++		{
++			SetUV(Output, CoordinateIndex, InPosition.xy);
++		}
+ 	}
+-	UNROLL
+-	for (int CoordinateIndex = NUM_MATERIAL_TEXCOORDS; CoordinateIndex < NUM_TEX_COORD_INTERPOLATORS; CoordinateIndex++)
+ 	{
+-		SetUV(Output, CoordinateIndex, CustomizedUVs[CoordinateIndex]);
++		UNROLL
++		for (int CoordinateIndex = NUM_MATERIAL_TEXCOORDS; CoordinateIndex < NUM_TEX_COORD_INTERPOLATORS; CoordinateIndex++)
++		{
++			SetUV(Output, CoordinateIndex, CustomizedUVs[CoordinateIndex]);
++		}
+ 	}
+ #endif
+ }
+@@ -169,18 +173,23 @@ void MainPS(
+ 
+ 	// can be optimized
+ 	float4 SvPosition = Input.Position;
+-	float2 ViewportUV = (SvPosition - PostProcessOutput_ViewportMin) * PostProcessOutput_ViewportSizeInverse;
++	float2 ViewportUV = (SvPosition.xy - PostProcessOutput_ViewportMin.xy) * PostProcessOutput_ViewportSizeInverse.xy;
+ 
+ #if NUM_TEX_COORD_INTERPOLATORS
+-	UNROLL
+-	for (int CoordinateIndex = 0; CoordinateIndex < NUM_MATERIAL_TEXCOORDS; CoordinateIndex++)
+ 	{
+-		Parameters.TexCoords[CoordinateIndex] = ViewportUV;
++		UNROLL
++		for (int CoordinateIndex = 0; CoordinateIndex < NUM_MATERIAL_TEXCOORDS; CoordinateIndex++)
++		{
++			Parameters.TexCoords[CoordinateIndex] = ViewportUV;
++		}
+ 	}
+-	UNROLL
+-	for (int CoordinateIndex = NUM_MATERIAL_TEXCOORDS; CoordinateIndex < NUM_TEX_COORD_INTERPOLATORS; CoordinateIndex++)
++	
+ 	{
+-		Parameters.TexCoords[CoordinateIndex] = GetUV(Input, CoordinateIndex);
++		UNROLL
++		for (int CoordinateIndex = NUM_MATERIAL_TEXCOORDS; CoordinateIndex < NUM_TEX_COORD_INTERPOLATORS; CoordinateIndex++)
++		{
++			Parameters.TexCoords[CoordinateIndex] = GetUV(Input, CoordinateIndex);
++		}
+ 	}
+ #endif
+ 
+diff --git a/Engine/Shaders/Private/PostProcessMotionBlur.usf b/Engine/Shaders/Private/PostProcessMotionBlur.usf
+index 7f6a98c62..1ef166741 100644
+--- a/Engine/Shaders/Private/PostProcessMotionBlur.usf
++++ b/Engine/Shaders/Private/PostProcessMotionBlur.usf
+@@ -407,7 +407,7 @@ void VisualizeMotionBlurPS(
+ 	// relative, in screen space -1...1 -1..1, can be even outside of that range, points into the movement direction
+ 	float2 VelocityAtTileCenter;
+ 	{
+-		VelocityAtTileCenter = DecodeVelocityFromTexture(VelocityTexture.SampleLevel(SharedVelocitySampler, UVAtTileCenter, 0).xy);
++		VelocityAtTileCenter = DecodeVelocityFromTexture(VelocityTexture.SampleLevel(SharedVelocitySampler, UVAtTileCenter, 0)).xy;
+ 
+ 		// reconstruct from camera motion if we don't have velocity data
+ 		if(!bSelectorOpaqueAtTileCenter)
+diff --git a/Engine/Shaders/Private/PostProcessTemporalAA.usf b/Engine/Shaders/Private/PostProcessTemporalAA.usf
+index 051187f7e..7020b7483 100644
+--- a/Engine/Shaders/Private/PostProcessTemporalAA.usf
++++ b/Engine/Shaders/Private/PostProcessTemporalAA.usf
+@@ -2009,12 +2009,12 @@ FTAAHistoryPayload TemporalAASample(uint2 GroupId, uint2 GroupThreadId, uint Gro
+ 
+ 		#if AA_DYNAMIC
+ 		{
+-			float2 VelocityN;
+-			VelocityN = SceneVelocityBuffer.SampleLevel(SceneVelocityBufferSampler, InputParams.NearestBufferUV + VelocityOffset, 0).xy;
++			float4 VelocityN;
++			VelocityN = SceneVelocityBuffer.SampleLevel(SceneVelocityBufferSampler, InputParams.NearestBufferUV + VelocityOffset, 0);
+ 			bool DynamicN = VelocityN.x > 0.0;
+ 			if(DynamicN)
+ 			{
+-				BackN = DecodeVelocityFromTexture(VelocityN);
++				BackN = DecodeVelocityFromTexture(VelocityN).xy;
+ 			}
+ 			BackTemp = BackN * OutputViewportSize.xy;
+ 		}
+diff --git a/Engine/Shaders/Private/PostProcessVelocityFlatten.usf b/Engine/Shaders/Private/PostProcessVelocityFlatten.usf
+index 5b7467229..fcdf24c7e 100644
+--- a/Engine/Shaders/Private/PostProcessVelocityFlatten.usf
++++ b/Engine/Shaders/Private/PostProcessVelocityFlatten.usf
+@@ -63,12 +63,13 @@ void VelocityFlattenMain(
+ { 
+ 	uint2 PixelPos = min(DispatchThreadId.xy + Velocity_ViewportMin, Velocity_ViewportMax - 1);
+ 
+-	float2 Velocity = VelocityTexture[PixelPos].xy;
++	float4 EncodedVelocity = VelocityTexture[PixelPos];
+ 	float Depth = DepthTexture[PixelPos].x;
+ 
+-	if (Velocity.x > 0.0)
++	float2 Velocity;
++	if (EncodedVelocity.x > 0.0)
+ 	{
+-		Velocity = DecodeVelocityFromTexture(Velocity);
++		Velocity = DecodeVelocityFromTexture(EncodedVelocity).xy;
+ 	}
+ 	else
+ 	{
+@@ -94,14 +95,14 @@ void VelocityFlattenMain(
+ 	bool bInsideViewport = all(PixelPos.xy < Velocity_ViewportMax);
+ 
+ 	// 11:11:10  (VelocityLength, VelocityAngle, Depth)
+-	float2 EncodedVelocity;
+-	EncodedVelocity.x = VelocityPolar.x;
+-	EncodedVelocity.y = VelocityPolar.y * (0.5 / PI) + 0.5;
++	float2 EncodedPolarVelocity;
++	EncodedPolarVelocity.x = VelocityPolar.x;
++	EncodedPolarVelocity.y = VelocityPolar.y * (0.5 / PI) + 0.5;
+ 
+ 	BRANCH
+ 	if (bInsideViewport)
+ 	{
+-		OutVelocityFlatTexture[PixelPos] = float3(EncodedVelocity, ConvertFromDeviceZ(Depth)).xyzz;
++		OutVelocityFlatTexture[PixelPos] = float3(EncodedPolarVelocity, ConvertFromDeviceZ(Depth)).xyzz;
+ 	}
+ 
+ 	// Limit velocity
+diff --git a/Engine/Shaders/Private/SSRT/SSRTPrevFrameReduction.usf b/Engine/Shaders/Private/SSRT/SSRTPrevFrameReduction.usf
+index 6e1873502..d5c5e9833 100644
+--- a/Engine/Shaders/Private/SSRT/SSRTPrevFrameReduction.usf
++++ b/Engine/Shaders/Private/SSRT/SSRTPrevFrameReduction.usf
+@@ -148,10 +148,11 @@ void MainCS(
+ 
+ 		bool bIsSky = WorldDepth > 100 * 1000;
+ 
+-		float2 EncodedVelocity = SceneVelocityBuffer.SampleLevel(SceneVelocityBufferSampler, SceneBufferUV, 0).xy;
++		float4 EncodedVelocity = SceneVelocityBuffer.SampleLevel(SceneVelocityBufferSampler, SceneBufferUV, 0);
++		
+ 		if (EncodedVelocity.x > 0.0)
+ 		{
+-			PrevScreen = ThisClip.xy - DecodeVelocityFromTexture(EncodedVelocity);
++			PrevScreen = ThisClip.xy - DecodeVelocityFromTexture(EncodedVelocity).xy;
+ 		}
+ 
+ 		float2 PrevFrameUV = PrevScreen.xy * PrevScreenPositionScaleBias.xy + PrevScreenPositionScaleBias.zw;
+diff --git a/Engine/Shaders/Private/SSRT/SSRTRayCast.ush b/Engine/Shaders/Private/SSRT/SSRTRayCast.ush
+index db3e066f8..63289f9a5 100644
+--- a/Engine/Shaders/Private/SSRT/SSRTRayCast.ush
++++ b/Engine/Shaders/Private/SSRT/SSRTRayCast.ush
+@@ -480,10 +480,10 @@ void ReprojectHit(float4 PrevScreenPositionScaleBias, Texture2D Texture, Sampler
+ 	float4 PrevClip = mul( ThisClip, View.ClipToPrevClip );
+ 	float2 PrevScreen = PrevClip.xy / PrevClip.w;
+ 
+-	float2 Velocity = Texture.SampleLevel( Sampler, HitUVz.xy, 0 ).xy;
+-	if( Velocity.x > 0.0 )
++	float4 EncodedVelocity = Texture.SampleLevel(Sampler, HitUVz.xy, 0);
++	if( EncodedVelocity.x > 0.0 )
+ 	{
+-		PrevScreen = ThisClip.xy - DecodeVelocityFromTexture( Velocity );
++		PrevScreen = ThisClip.xy - DecodeVelocityFromTexture(EncodedVelocity).xy;
+ 	}
+ 
+ 	float2 PrevUV = PrevScreen.xy * PrevScreenPositionScaleBias.xy + PrevScreenPositionScaleBias.zw;
+diff --git a/Engine/Shaders/Private/ScreenSpaceDenoise/SSDTemporalAccumulation.usf b/Engine/Shaders/Private/ScreenSpaceDenoise/SSDTemporalAccumulation.usf
+index 3b3dfbab0..5ec8ab7f4 100644
+--- a/Engine/Shaders/Private/ScreenSpaceDenoise/SSDTemporalAccumulation.usf
++++ b/Engine/Shaders/Private/ScreenSpaceDenoise/SSDTemporalAccumulation.usf
+@@ -442,11 +442,11 @@ void TemporallyAccumulate(
+ 
+ 		if (1)
+ 		{
+-			float2 VelocityN = SceneVelocityBuffer.SampleLevel(GlobalPointClampedSampler, SceneBufferUV, 0).xy;
++			float4 VelocityN = SceneVelocityBuffer.SampleLevel(GlobalPointClampedSampler, SceneBufferUV, 0);
+ 			bool DynamicN = VelocityN.x > 0.0;
+ 			if (DynamicN)
+ 			{
+-				Velocity = DecodeVelocityFromTexture(VelocityN);
++				Velocity = DecodeVelocityFromTexture(VelocityN).xy;
+ 			}
+ 		}
+ 
+diff --git a/Engine/Shaders/Private/SubsurfaceBurleyNormalized.ush b/Engine/Shaders/Private/SubsurfaceBurleyNormalized.ush
+index 67016fa50..4db1a522a 100644
+--- a/Engine/Shaders/Private/SubsurfaceBurleyNormalized.ush
++++ b/Engine/Shaders/Private/SubsurfaceBurleyNormalized.ush
+@@ -909,14 +909,11 @@ float4 UpdateQualityVariance(float4 SubsurfaceColor, float2 BufferUV)
+ 
+ #if (ENABLE_VELOCITY)
+ 	{
+-		float2 VelocityN;
+-		VelocityN = Texture2DSampleLevel(SubsurfaceInput2_Texture, SubsurfaceSampler2, NearestBufferUV + VelocityOffset, 0).xy;
+-		
+-		bool DynamicN = VelocityN.x > 0.0;
+-
+-		if (DynamicN)
++		float4 EncodedVelocity = Texture2DSampleLevel(SubsurfaceInput2_Texture, SubsurfaceSampler2, NearestBufferUV + VelocityOffset, 0);
++    
++		if (EncodedVelocity.x > 0.0)
+ 		{
+-			BackN = DecodeVelocityFromTexture(VelocityN);
++			BackN = DecodeVelocityFromTexture(EncodedVelocity).xy;
+ 		}
+ 
+ 		BackTemp = BackN * SubsurfaceInput1_ViewportSize.xy;
+diff --git a/Engine/Shaders/Private/VelocityCommon.ush b/Engine/Shaders/Private/VelocityCommon.ush
+index d7e5452c3..19a58eada 100644
+--- a/Engine/Shaders/Private/VelocityCommon.ush
++++ b/Engine/Shaders/Private/VelocityCommon.ush
+@@ -6,14 +6,18 @@
+ 
+ #pragma once
+ 
+-float2 Calculate2DVelocity(float4 PackedVelocityA, float4 PackedVelocityC)
++float3 Calculate3DVelocity(float4 PackedVelocityA, float4 PackedVelocityC)
+ {
+-	float2 ScreenPos = PackedVelocityA.xy / PackedVelocityA.w - ResolvedView.TemporalAAJitter.xy;
+-	float2 PrevScreenPos = PackedVelocityC.xy / PackedVelocityC.w - ResolvedView.TemporalAAJitter.zw;
++  float2 ScreenPos = PackedVelocityA.xy / PackedVelocityA.w - ResolvedView.TemporalAAJitter.xy;
++  float2 PrevScreenPos = PackedVelocityC.xy / PackedVelocityC.w - ResolvedView.TemporalAAJitter.zw;
+ 
+-	// 2d velocity, includes camera an object motion
+-	float2 Velocity = ScreenPos - PrevScreenPos;
++  float DeviceZ = PackedVelocityA.z / PackedVelocityA.w;
++  float PrevDeviceZ = PackedVelocityC.z / PackedVelocityC.w;
+ 
+-	// Make sure not to touch 0,0 which is clear color
+-	return Velocity;
+-}
++  // 3d velocity, includes camera an object motion
++
++  float3 Velocity = float3(ScreenPos - PrevScreenPos, DeviceZ - PrevDeviceZ);
++
++  // Make sure not to touch 0,0 which is clear color
++  return Velocity;
++}
+\ No newline at end of file
+diff --git a/Engine/Shaders/Private/VelocityShader.usf b/Engine/Shaders/Private/VelocityShader.usf
+index 3b9fbf4d1..7753f1c14 100644
+--- a/Engine/Shaders/Private/VelocityShader.usf
++++ b/Engine/Shaders/Private/VelocityShader.usf
+@@ -261,10 +261,7 @@ void MainPixelShader(
+ 	OutCoverage = DiscardMaterialWithPixelCoverage(MaterialParameters, PixelMaterialInputs);
+ #endif
+ 
+-	// 2d velocity, includes camera an object motion
+-	float2 Velocity = Calculate2DVelocity(Input.PackedVelocityA, Input.PackedVelocityC);
+-
+-	// Make sure not to touch 0,0 which is clear color
+-	OutColor.xy = EncodeVelocityToTexture(Velocity);
+-	OutColor.zw = float2(0, 0);
++	// 3d velocity, includes camera an object motion
++	float3 Velocity = Calculate3DVelocity(Input.PackedVelocityA, Input.PackedVelocityC);
++	OutColor = EncodeVelocityToTexture(Velocity);
+ }
+diff --git a/Engine/Source/Runtime/Engine/Public/SceneView.h b/Engine/Source/Runtime/Engine/Public/SceneView.h
+index d2a1e9caf..d1248cd70 100644
+--- a/Engine/Source/Runtime/Engine/Public/SceneView.h
++++ b/Engine/Source/Runtime/Engine/Public/SceneView.h
+@@ -635,6 +635,7 @@ enum ETranslucencyVolumeCascade
+ 	VIEW_UNIFORM_BUFFER_MEMBER(uint32, FrameNumber) \
+ 	VIEW_UNIFORM_BUFFER_MEMBER(uint32, StateFrameIndexMod8) \
+ 	VIEW_UNIFORM_BUFFER_MEMBER(uint32, StateFrameIndex) \
++	VIEW_UNIFORM_BUFFER_MEMBER(uint32, ForceDrawAllVelocities) \
+ 	VIEW_UNIFORM_BUFFER_MEMBER_EX(float, CameraCut, EShaderPrecisionModifier::Half) \
+ 	VIEW_UNIFORM_BUFFER_MEMBER_EX(float, UnlitViewmodeMask, EShaderPrecisionModifier::Half) \
+ 	VIEW_UNIFORM_BUFFER_MEMBER_EX(FLinearColor, DirectionalLightColor, EShaderPrecisionModifier::Half) \
+diff --git a/Engine/Source/Runtime/Renderer/Private/SceneRendering.cpp b/Engine/Source/Runtime/Renderer/Private/SceneRendering.cpp
+index b217ee149..84947a4f3 100644
+--- a/Engine/Source/Runtime/Renderer/Private/SceneRendering.cpp
++++ b/Engine/Source/Runtime/Renderer/Private/SceneRendering.cpp
+@@ -329,6 +329,13 @@ TAutoConsoleVariable<int32> CVarTransientResourceAliasing_Buffers(
+ 	TEXT("Enables transient resource aliasing for specified buffers. Used only if GSupportsTransientResourceAliasing is true.\n"),
+ 	ECVF_ReadOnly);
+ 
++static TAutoConsoleVariable<int32> CVarBasePassForceOutputsVelocity(
++  TEXT("r.BasePassForceOutputsVelocity"), 0,
++  TEXT("Force the base pass to compute motion vector, regardless of FPrimitiveUniformShaderParameters.")
++  TEXT("0: Disabled (default)")
++  TEXT("1: Enabled"),
++  ECVF_RenderThreadSafe);
++
+ #if !UE_BUILD_SHIPPING
+ 
+ static TAutoConsoleVariable<int32> CVarTestInternalViewRectOffset(
+@@ -1439,6 +1446,8 @@ void FViewInfo::SetupUniformBufferParameters(
+ 			TemporalJitterPixels.X,
+ 			TemporalJitterPixels.Y);
+ 	}
++
++	ViewUniformShaderParameters.ForceDrawAllVelocities = CVarBasePassForceOutputsVelocity.GetValueOnRenderThread();
+ 		
+ 	uint32 FrameIndex = 0;
+ 	if (ViewState)
