@@ -1,0 +1,79 @@
+diff --git a/Engine/Shaders/Private/MaterialTemplate.ush b/Engine/Shaders/Private/MaterialTemplate.ush
+index b73bf5b0a..cea64a30a 100644
+--- a/Engine/Shaders/Private/MaterialTemplate.ush
++++ b/Engine/Shaders/Private/MaterialTemplate.ush
+@@ -1674,7 +1674,7 @@ MaterialFloat4 MobileSceneTextureLookup(inout FMaterialPixelParameters Parameter
+ 
+ #if POST_PROCESS_MATERIAL
+ /** Samples the screen-space velocity for the specified UV coordinates. */
+-float2 PostProcessVelocityLookup(float Depth, float2 UV)
++float2 PostProcessVelocityLookup(float3 WorldPosition, float Depth, float2 UV)
+ {
+ #if GBUFFER_HAS_VELOCITY
+ 	float2 Velocity = Texture2DSampleLevel(SceneTexturesStruct.GBufferVelocityTexture, SceneTexturesStruct.GBufferVelocityTextureSampler, UV, 0).xy;
+@@ -1682,24 +1682,30 @@ float2 PostProcessVelocityLookup(float Depth, float2 UV)
+ 	float2 Velocity = Texture2DSample(PostProcessInput_4_Texture, PostProcessInput_4_SharedSampler, UV).xy;
+ #endif
+ 
+-	if( Velocity.x > 0.0 )
+-	{
+-		Velocity = DecodeVelocityFromTexture(Velocity);
+-	}
+-	else
+-	{
+-		float4 ThisClip = float4( UV, Depth, 1 );
+-		float4 PrevClip = mul( ThisClip, View.ClipToPrevClip );
+-		float2 PrevScreen = PrevClip.xy / PrevClip.w;
+-		Velocity = UV - PrevScreen;
+-	}
++	// if( Velocity.x > 0.0 )
++	// {
++	// 	Velocity = DecodeVelocityFromTexture(Velocity);
++	// }
++	// else
++	// {
++	// 	// currentPos is the viewport position at this pixel in the range -1 to 1.
++	// 	float4 currentPos = float4(UV.x * 2 - 1, (1 - UV.y) * 2 - 1, Depth, 1);
++	// 	// make homogeneous coords for world position
++	// 	float4 worldPos = float4(WorldPosition, 1.0);
++	// 	// Use the world position, and transform by the previous view-projection matrix.
++	// 	float4 previousPos = mul(worldPos, View.PrevViewProj);
++	// 	// Convert to nonhomogeneous points [-1,1] by dividing by w.
++	// 	previousPos /= previousPos.w;
++	// 	// Use this frame's position and last frame's to compute the pixel velocity.
++	// 	Velocity = (currentPos - previousPos);
++	// }
+ 
+ 	return Velocity;
+ }
+ #endif
+ 
+ /** Applies an offset to the scene texture lookup and decodes the HDR linear space color. */
+-float4 SceneTextureLookup(float2 UV, int SceneTextureIndex, bool bFiltered)
++float4 SceneTextureLookup(in FMaterialPixelParameters Parameters, float2 UV, int SceneTextureIndex, bool bFiltered)
+ {
+ #if SCENE_TEXTURES_DISABLED
+ 	return float4(0.0f, 0.0f, 0.0f, 0.0f);
+@@ -1766,7 +1772,7 @@ float4 SceneTextureLookup(float2 UV, int SceneTextureIndex, bool bFiltered)
+ 			return float4(ScreenSpaceData.GBuffer.StoredSpecular.rrr, 0);
+ #if POST_PROCESS_MATERIAL
+ 		case PPI_Velocity:
+-			return float4(PostProcessVelocityLookup(ScreenSpaceData.GBuffer.Depth, UV), 0, 0);
++			return float4(PostProcessVelocityLookup(GetWorldPosition(Parameters), ScreenSpaceData.GBuffer.Depth, UV), 0, 0);
+ #endif
+ 		default:
+ 			return float4(0, 0, 0, 0);
+diff --git a/Engine/Source/Runtime/Engine/Private/Materials/HLSLMaterialTranslator.h b/Engine/Source/Runtime/Engine/Private/Materials/HLSLMaterialTranslator.h
+index cf5b13623..5900c625e 100644
+--- a/Engine/Source/Runtime/Engine/Private/Materials/HLSLMaterialTranslator.h
++++ b/Engine/Source/Runtime/Engine/Private/Materials/HLSLMaterialTranslator.h
+@@ -4917,7 +4917,8 @@ protected:
+ 		{
+ 			int32 LookUp = AddCodeChunk(
+ 				MCT_Float4,
+-				TEXT("SceneTextureLookup(%s, %d, %s)"),
++				// TEXT("SceneTextureLookup(%s, %d, %s)"),
++				TEXT("SceneTextureLookup(Parameters, %s, %d, %s)"),
+ 				*CoerceParameter(BufferUV, MCT_Float2), (int)SceneTextureId, bFiltered ? TEXT("true") : TEXT("false")
+ 				);
+ 
